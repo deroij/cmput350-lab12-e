@@ -31,6 +31,7 @@ struct Circle {
     sf::Vector2f position;
     float radius;
     Vector4f color;
+    sf::Vector2f direction;
 };
 
 struct BVHNode {
@@ -39,7 +40,7 @@ struct BVHNode {
     int childBOrLen = -1;  // if leaf node, length into index list, else child bvh node ptr
     int isLeaf = 0;
     // TODO Bonus 1: store each node's height in the tree and color its box in Draw by height.
-    int padding = 0;  // to get to POT size of 32 bytes.
+    int height = 0;  // to get to POT size of 32 bytes.
 };
 static_assert(sizeof(BVHNode) == 32, "keep BVHNode a power-of-two size");
 
@@ -56,8 +57,16 @@ struct BVH {
     }
 
     // TODO Q4: write a reset() function that rebuilds the tree instead of refitting it.
+    void reset() {
+        const std::vector<Circle>& prims = *primitives;
 
-    void constructNode(int startIdx, int numIndices, int bvhOffset) {
+        nodes.clear();
+        nodes.reserve(2 * prims.size());
+        nodes.push_back({});
+        constructNode(0, static_cast<int>(indices.size()), 0);
+    }
+
+    int constructNode(int startIdx, int numIndices, int bvhOffset) {
         const std::vector<Circle>& prims = *primitives;
         const auto first = indices.begin() + startIdx;
         const auto last = first + numIndices;
@@ -131,7 +140,7 @@ struct BVH {
         // see if we should be leaf node
         if (numIndices * T_ISECT < minCost) {
             makeLeaf();
-            return;
+            return 0;
         }
         // repartition indices based on chosen split
         const float pivotPos =
@@ -141,15 +150,17 @@ struct BVH {
         const int smallerCount = static_cast<int>(mid - first);
         if (smallerCount == numIndices) {
             makeLeaf();
-            return;
+            return 0;
         }
         // internal node; children are appended after their parent
         const int childA = static_cast<int>(nodes.size());
         const int childB = childA + 1;
         nodes[bvhOffset] = BVHNode{totalBound, childA, childB, /*isLeaf=*/false};
         nodes.resize(nodes.size() + 2);  // filled in by the recursive calls
-        constructNode(startIdx, smallerCount, childA);
-        constructNode(startIdx + smallerCount, numIndices - smallerCount, childB);
+        int i = constructNode(startIdx, smallerCount, childA) + 1;
+        int j = constructNode(startIdx + smallerCount, numIndices - smallerCount, childB) + 1;
+        nodes[bvhOffset].height = std::max(i,j);
+        return std::max(i,j);
     }
 
     // Refit every box bottom-up without changing the tree structure. Children are always stored
@@ -196,8 +207,8 @@ bool intersects(sf::Vector2f point, const BVHNode& node, const BVH& bvh, Vector4
 // TODO Q3: store a 2D movement direction for each circle, and write an update() function that
 // moves every circle by its movement.
 struct Scene {
-    std::size_t createCircle(sf::Vector2f position, float radius, const Vector4f& color) {
-        circles.push_back({position, radius, color});
+    std::size_t createCircle(sf::Vector2f position, float radius, const Vector4f& color, sf::Vector2f direction) {
+        circles.push_back({position, radius, color, direction});
         return circles.size() - 1;
     }
 
@@ -206,18 +217,50 @@ struct Scene {
         return circles[i];
     }
 
+    void update() {
+        for (int i = 0; i < circles.size(); i++) {
+            circles[i].position += circles[i].direction;
+        }
+    }
+
     bool valid(std::size_t i) const { return i < circles.size(); }
 
     std::vector<Circle> circles;
 };
 
-void Draw(sf::RenderWindow& window, const AABB<float>& aabb) {
+void Draw(sf::RenderWindow& window, const AABB<float>& aabb, int depth) {
     // draw frame of rectangle
     static sf::RectangleShape shape;
     shape.setSize(aabb.maxPoint - aabb.minPoint);
     shape.setPosition(aabb.minPoint);
     shape.setFillColor(sf::Color::Transparent);
-    shape.setOutlineColor(sf::Color::White);
+    switch (depth)
+    {
+    case 1:
+        shape.setOutlineColor(sf::Color::Red);
+        break;
+    case 2:
+        shape.setOutlineColor(sf::Color::Yellow);
+        break;
+    case 3:
+        shape.setOutlineColor(sf::Color::Green);
+        break;
+    case 4:
+        shape.setOutlineColor(sf::Color::Cyan);
+        break;
+    case 5:
+        shape.setOutlineColor(sf::Color::Blue);
+        break;
+    case 6:
+        shape.setOutlineColor(sf::Color::Magenta);
+        break;
+    case 7:
+        shape.setOutlineColor(sf::Color::Red + sf::Color::White);
+        break;
+    default:
+        shape.setOutlineColor(sf::Color::White);
+        break;
+    }
     shape.setOutlineThickness(1.0f);
     window.draw(shape);
 }
@@ -234,7 +277,7 @@ int main() {
     Scene scene;
     for (int n = 0; n < 100; ++n) {
         scene.createCircle({uniform(0, gScreenWidth), uniform(0, gScreenHeight)}, uniform(10, 20),
-                           {uniform(0, 1), uniform(0, 1), uniform(0, 1), 1});
+                           {uniform(0, 1), uniform(0, 1), uniform(0, 1), 1}, {uniform(-5, 5), uniform(-5, 5)});
     }
     BVH bvh(scene.circles);
 
@@ -251,20 +294,34 @@ int main() {
         }
 
         // TODO Q3: every frame, call update() on the scene and fullRefit() on the BVH.
+        scene.update();
+        //bvh.fullRefit();
         // TODO Q4: rebuild the BVH with reset() instead of fullRefit().
+        bvh.reset();
 
         for (int y = 0; y < gScreenHeight; ++y) {
             for (int x = 0; x < gScreenWidth; ++x) {
                 const sf::Vector2f pixel(static_cast<float>(x), static_cast<float>(y));
                 // TODO Q2: antialiasing. Take four samples at offsets of +-0.3333 from the pixel
                 // and average their colors.
-                Vector4f color{};  // stays transparent black on a miss
-                intersects(pixel, bvh.nodes[0], bvh, color);
+                Vector4f colorA{};  // stays transparent black on a miss
+                intersects(pixel + sf::Vector2f{0.3333f,0.0f}, bvh.nodes[0], bvh, colorA);
+                Vector4f colorB{};
+                intersects(pixel - sf::Vector2f{0.3333f,0.0f}, bvh.nodes[0], bvh, colorB);
+                Vector4f colorC{};
+                intersects(pixel + sf::Vector2f{0.0f,0.3333f}, bvh.nodes[0], bvh, colorC);
+                Vector4f colorD{};
+                intersects(pixel - sf::Vector2f{0.0f,0.3333f}, bvh.nodes[0], bvh, colorD);
+
                 const std::size_t i = 4 * (static_cast<std::size_t>(y) * gScreenWidth + x);
-                pixels[i + 0] = static_cast<std::uint8_t>(255 * color.x);  // R
-                pixels[i + 1] = static_cast<std::uint8_t>(255 * color.y);  // G
-                pixels[i + 2] = static_cast<std::uint8_t>(255 * color.z);  // B
-                pixels[i + 3] = static_cast<std::uint8_t>(255 * color.w);  // A
+                pixels[i + 0] = (static_cast<std::uint8_t>(255 * colorA.x) + static_cast<std::uint8_t>(255 * colorB.x) +
+                static_cast<std::uint8_t>(255 * colorC.x) + static_cast<std::uint8_t>(255 * colorD.x)) / 4.0f;  // R
+                pixels[i + 1] = (static_cast<std::uint8_t>(255 * colorA.y) + static_cast<std::uint8_t>(255 * colorB.y) +
+                static_cast<std::uint8_t>(255 * colorC.y) + static_cast<std::uint8_t>(255 * colorD.y)) / 4.0f;  // G
+                pixels[i + 2] = (static_cast<std::uint8_t>(255 * colorA.z) + static_cast<std::uint8_t>(255 * colorB.z) +
+                static_cast<std::uint8_t>(255 * colorC.z) + static_cast<std::uint8_t>(255 * colorD.z)) / 4.0f;  // B
+                pixels[i + 3] = (static_cast<std::uint8_t>(255 * colorA.w) + static_cast<std::uint8_t>(255 * colorB.w) +
+                static_cast<std::uint8_t>(255 * colorC.w) + static_cast<std::uint8_t>(255 * colorD.w)) / 4.0f;  // A
             }
         }
         texture.update(pixels.data());
@@ -273,7 +330,9 @@ int main() {
         window.draw(sprite);
         // TODO Q1: only draw non-leaf nodes so the BVH structure is easier to see.
         for (const BVHNode& node : bvh.nodes) {
-            Draw(window, node.bounds);
+            if (!node.isLeaf) {
+                Draw(window, node.bounds, node.height);
+            }
         }
         window.display();
     }

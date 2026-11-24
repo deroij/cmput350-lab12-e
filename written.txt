@@ -1,5 +1,10 @@
 ﻿Q3. What happens to the bounding boxes with update + fullRefit?
+They start to stretch and cover the entire screen, which starts to lose the effectiveness of a BVHtree.
 
 Q4. What happens with reset (rebuild every frame) instead?
+The bounding boxes now jump from pair to pair, creating boxes with the least area. This leaves the tree looking more readable,
+and more effiencient, as less large squares have to be drawn.
 
 Q5. Why are some circles drawn with their sides cut off?
+I did not notice any circles with their sides cut off. I was told this happens if you update the circles before updating
+the bounding boxes, but I never noticed it.
